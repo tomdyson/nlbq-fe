@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sample Tailwind Layout</title>
+    <link href="/dist/output.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.min.js"></script>
+</head>
+
+<body class="flex justify-center min-h-screen pt-6 font-mono text-slate-700">
+    <div id="app" class="max-w-screen-lg mx-auto w-full p-4 bg-white flex flex-col lg:flex-row">
+        <div class="w-full lg:w-1/4 p-4">
+            <!-- Content for 1st column -->
+            <img src="paris-figure.jpg" alt="Paris" class="lg:w-full w-32">
+        </div>
+        <div class="w-full lg:w-3/4 p-4">
+            <!-- Content for 2nd column -->
+            <form @submit="getStatement">
+                <div class="flex justify-between items-center mb-3 mt-3">
+                    <label for="question" class="text-3xl text-slate-500 font-mono font-light block">Ask
+                        BigQuery</label>
+                    <span class="text-sm">
+                        use GPT-4 <input type="checkbox" name="use_gpt_4" v-model.lazy="use_gpt_4">
+                    </span>
+                </div>
+                <input id="question" class="text-lg font-light border border-gray-300 p-2 mb-1 w-full rounded"
+                    type="text" v-model.lazy="question" autofocus="true"/>
+                <input id="submit"
+                    class="hover:opacity-75 mt-3 cursor-pointer bg-cyan-100 px-2 py-1 font-light rounded text-lg mb-1"
+                    type="submit" :value="button_text" />
+            </form>
+
+            <div class="mt-1 mb-2" v-if="statement.length">
+                <div class="my-3 text-lg font-mono text-white bg-rose-300 pt-2 px-2 pb-1 rounded leading-normal"
+                    contenteditable="false" v-html="formatted_statement"></div>
+                <div class="text-lg mt-3 font-mono leading-normal" v-if="!html_results.length">
+                    This query will use <span class="bg-pink-200">{{data}}</span> from the 1TB monthly allowance.
+                    You can run <span class="bg-pink-200">{{qpm}}</span> queries like this each month. Building this
+                    query cost <span class="bg-pink-200">{{gpt_cost_in_pence}}</span> pence.
+                    <div v-if="execute_link_text.length">
+                        <input id="submit"
+                            class="hover:opacity-75 mt-3 cursor-pointer px-2 py-1 rounded bg-green-200 text-lg mb-1"
+                            type="submit" @click="run_statement()" :value=execute_link_text />
+                    </div>
+                    <div v-else>
+                        <input id="submit"
+                            class="hover:opacity-75 mt-3 cursor-pointer px-2 py-1 text-lg rounded bg-green-200 mb-1"
+                            value="Running the query" />
+                    </div>
+                </div>
+            </div>
+
+            <div id="context" v-if="html_results.length"
+                class="my-3 text-lg pt-2 px-2 pb-1 rounded leading-normal bg-cyan-100 text-cyan-600"
+                v-html="html_results">
+            </div>
+
+            <div v-if="answer.length" v-html="answer"
+                class="my-3 text-lg bg-green-200 font-mono pt-2 px-2 pb-1 rounded leading-normal"></div>
+
+        </div>
+    </div>
+
+    <script>
+        function formatStatement(statement) {
+            return statement.replace(/\n/g, "<br />");
+        }
+
+        var app = new Vue({
+            el: "#app",
+            data: {
+                use_gpt_4: false,
+                button_text: "Tell me",
+                question: "",
+                statement: "",
+                formatted_statement: "",
+                data: "",
+                gpt_cost_in_pence: 0,
+                text_results: "",
+                html_results: "",
+                answer: "",
+                execute_link_text: "OK, run it",
+                qpm: 0,
+                api_stub: "http://0.0.0.0:8080", // e.g. https://my-domain.com
+            },
+            methods: {
+                async getStatement(e) {
+                    try {
+                        e.preventDefault();
+                        app.button_text = "Working out the query...";
+                        app.statement = "";
+                        app.answer = "";
+                        app.html_results = "";
+
+                        const model = app.use_gpt_4 ? "gpt-4" : "gpt-3.5-turbo";
+                        const response = await fetch(app.api_stub + '/api/dry_run', {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json", },
+                            body: JSON.stringify({ question: app.question, model }),
+                        })
+
+                        if (!response.ok) throw new Error('Network response was not ok');
+
+                        const responseJson = await response.json();
+                        app.statement = responseJson.statement;
+                        app.formatted_statement = formatStatement(responseJson.statement);
+                        app.data = responseJson.data;
+                        app.qpm = responseJson.qpm;
+                        app.gpt_cost_in_pence = (responseJson.gpt_cost * 100 * 0.8).toFixed(2); // cost in pence
+                        app.button_text = "Tell me";
+                    } catch (error) {
+                        console.log(error);
+                        app.button_text = "Sorry, something went wrong.";
+                    }
+                },
+                async run_statement() {
+                    try {
+                        app.execute_link_text = "";
+                        app.html_results = "";
+
+                        let response = await fetch(app.api_stub + '/api/run_statement', {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json", },
+                            body: JSON.stringify({
+                                question: app.question,
+                                statement: app.statement,
+                            }),
+                        })
+
+                        if (!response.ok) throw new Error('Error while running statement.');
+
+                        let responseJson = await response.json();
+                        app.text_results = responseJson.text_results;
+                        app.html_results = responseJson.html_results;
+                        app.execute_link_text = "OK, run it";
+                        app.answer = 'working out answer...'
+
+                        response = await fetch(app.api_stub + '/api/answer', {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json", },
+                            body: JSON.stringify({
+                                question: app.question,
+                                statement: app.statement,
+                                results: app.text_results
+                            }),
+                        })
+
+                        if (!response.ok) throw new Error('Error while getting the answer.');
+
+                        responseJson = await response.json();
+                        app.answer = formatStatement(responseJson.answer);
+                    } catch (error) {
+                        console.log(error);
+                        app.execute_link_text = "An error occurred. Please try again.";
+                    }
+                },
+            },
+        });
+    </script>
+</body>
+
+</html>
